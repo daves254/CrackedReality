@@ -1,0 +1,197 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    repositories {
+        if (project.hasProperty("googleRepo")) {
+            maven {
+                name "Google"
+                url project.property("googleRepo")
+                allowInsecureProtocol true // Local Nexus in CI uses HTTP
+            }
+        } else {
+            google()
+        }
+
+        if (project.hasProperty("centralRepo")) {
+            maven {
+                name "MavenCentral"
+                url project.property("centralRepo")
+                allowInsecureProtocol true // Local Nexus in CI uses HTTP
+            }
+        } else {
+            mavenCentral()
+        }
+    }
+
+    dependencies {
+        classpath Deps.tools_androidgradle
+        classpath Deps.tools_kotlingradle
+    }
+}
+
+plugins {
+    id("io.gitlab.arturbosch.detekt").version("1.19.0")
+}
+
+allprojects {
+    repositories {
+        if (project.hasProperty("googleRepo")) {
+            maven {
+                name "Google"
+                url project.property("googleRepo")
+                allowInsecureProtocol true // Local Nexus in CI uses HTTP
+            }
+        } else {
+            google()
+        }
+
+        maven {
+            name "Mozilla Nightly"
+            url "https://nightly.maven.mozilla.org/maven2"
+
+            content {
+                // Always fetch components from the snapshots repository
+                includeGroup "org.mozilla.components"
+            }
+        }
+
+        maven {
+            name "Mozilla"
+            url "https://maven.mozilla.org/maven2"
+
+            content {
+                // Never fetch components from here. We always want to use snapshots.
+                excludeGroup "org.mozilla.components"
+            }
+        }
+
+        if (project.hasProperty("centralRepo")) {
+            maven {
+                name "MavenCentral"
+                url project.property("centralRepo")
+                allowInsecureProtocol true // Local Nexus in CI uses HTTP
+            }
+        } else {
+            mavenCentral()
+        }
+    }
+
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions.freeCompilerArgs += [
+                "-Xopt-in=kotlin.RequiresOptIn"
+        ]
+    }
+}
+
+subprojects {
+    apply plugin: 'jacoco'
+
+    afterEvaluate {
+        if (it.hasProperty('android')) {
+            jacoco {
+                toolVersion = "0.8.2"
+            }
+
+            android {
+                testOptions {
+                    unitTests {
+                        includeAndroidResources = true
+                    }
+                }
+
+                lintOptions {
+                    warningsAsErrors true
+                    abortOnError true
+                }
+            }
+
+            if (project.hasProperty("coverage") && project.name != "support-test") {
+                tasks.withType(Test) {
+                    jacoco.includeNoLocationClasses = true
+                    doLast { jacocoTestReport.execute() }
+                }
+
+                task jacocoTestReport(type: JacocoReport) {
+                    reports {
+                        xml.enabled = true
+                        html.enabled = true
+                    }
+
+                    def fileFilter = ['**/R.class', '**/R$*.class', '**/BuildConfig.*', '**/Manifest*.*',
+                                      '**/*Test*.*', 'android/**/*.*', '**/*$[0-9].*']
+                    def kotlinDebugTree = fileTree(dir: "$project.buildDir/tmp/kotlin-classes/debug", excludes: fileFilter)
+                    def javaDebugTree = fileTree(dir: "$project.buildDir/intermediates/classes/debug", excludes: fileFilter)
+                    def mainSrc = "$project.projectDir/src/main/java"
+
+                    sourceDirectories = files([mainSrc])
+                    classDirectories = files([kotlinDebugTree, javaDebugTree])
+                    executionData = fileTree(dir: project.buildDir, includes: [
+                            'jacoco/testDebugUnitTest.exec', 'outputs/code-coverage/connected/*coverage.ec'
+                    ])
+                }
+
+                android {
+                    buildTypes {
+                        debug {
+                            testCoverageEnabled true
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
+
+detekt {
+    // The version number is duplicated, please refer to plugins block for more details
+    version = "1.19.0"
+    buildUponDefaultConfig = true
+    input = files("$projectDir/app")
+    config = files("$projectDir/config/detekt.yml")
+    baseline = file("$projectDir/config/detekt-baseline.xml")
+
+    reports {
+        html {
+            enabled = true
+            destination = file("$projectDir/build/reports/detekt.html")
+        }
+    }
+}
+
+configurations {
+    ktlint
+}
+
+dependencies {
+    ktlint("com.pinterest:ktlint:0.41.0") {
+        attributes {
+            attribute(Bundling.BUNDLING_ATTRIBUTE, getObjects().named(Bundling, Bundling.EXTERNAL))
+        }
+    }
+}
+
+task ktlint(type: JavaExec, group: "verification") {
+    description = "Check Kotlin code style."
+    classpath = configurations.ktlint
+    main = "com.pinterest.ktlint.Main"
+    args "app/src/**/*.kt", "!**/build/**/*.kt"
+}
+
+task ktlintFormat(type: JavaExec, group: "formatting") {
+    description = "Fix Kotlin code style deviations."
+    classpath = configurations.ktlint
+    main = "com.pinterest.ktlint.Main"
+    args "-F", "app/src/**/*.kt", "!**/build/**/*.kt"
+}
+
+task listRepositories {
+    doLast {
+        println "Repositories:"
+        project.repositories.each { println "Name: " + it.name + "; url: " + it.url }
+   }
+}
